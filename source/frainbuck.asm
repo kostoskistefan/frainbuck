@@ -2,10 +2,8 @@
 ; Copyright (c) 2024, Kostoski Stefan (MIT License).
 ; https://github.com/kostoskistefan/frainbuck
 
-section .data                                ; Start of .data section
-filename db "input.bf", 0                    ; The file containing the brainfuck code
-
 section .bss                                 ; Start of .bss section
+filename resb 256                            ; The filename of the brainfuck code
 tape_size equ 30000                          ; The size of the brainfuck language tape
 tape resb tape_size                          ; The brainfuck language tape
 tape_offset resq 1                           ; The current cell offset of the tape in the brainfuck language 
@@ -23,6 +21,15 @@ global _start                                ; Make _start label available to li
 ; @brief Entry point
 ; ----------------------------------------------------------------------------------------------------------------------
 _start:
+    mov ecx, [rsp]
+    cmp ecx, 2                               ; Check if the number of arguments is 2
+    jne exit_failure                         ; If not, exit the interpreter
+
+    inc rsi                                  ; Skip the first argument (path of the executable)
+    mov r10, [rsp+rsi*8+8]                   ; Store the second argument in RDI register
+    mov r11, filename                        ; Store the filename address in RSI register
+    call string_copy
+    
     mov rdi, filename                        ; Store the filename in RDI register
     call open_file                           ; Open the brainfuck code file
 
@@ -181,6 +188,24 @@ frainbuck_jump_backward_loop:
     cmp byte [r8], '['                       ; Check if the current character is '['
     jne frainbuck_jump_backward_loop         ; If not, loop
     jmp frainbuck_parse_source_code_continue ; Jump to the source code parsing loop
+
+; ----------------------------------------------------------------------------------------------------------------------
+; @brief Copy a string from one address to another
+; @param r10 The address of the string to copy from
+; @param r11 The address of the string to copy to
+; @modifies AL, R10, R11 registers
+; ----------------------------------------------------------------------------------------------------------------------
+string_copy:
+    cmp byte [r10], 0                        ; Check if the string is empty
+    je string_copy_done                      ; If so, exit the function
+    mov al, [r10]                            ; Store the current character in AL
+    mov [r11], al                            ; Store the current character in the destination address
+    inc r10                                  ; Move to the next character from the source
+    inc r11                                  ; Move to the next character in the destination
+    jmp string_copy                          ; Loop
+
+string_copy_done:
+    ret
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; @brief Open a file with a given filename
