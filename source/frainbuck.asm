@@ -5,7 +5,8 @@
 ; TODO: Make the second argument optional
 ; TODO: Add error messages
 ; TODO: Add checks for unmatched '[' and ']' characters
-; TODO: Add a check for a frainbuck_input_pointer overflow and null terminator
+; TODO: Add a check for a frainbuck_input_character_address overflow and null terminator
+; TODO: Make frainbuck_input_character_address hold the current character instead of a character address
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; Data Section
@@ -14,7 +15,7 @@ section .data                                       ; Start of .data section
 new_line db 10, 0                                   ; The new line character
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; Block starting symbol (BSS) section
+; Block Starting Symbol (BSS) Section
 ; ----------------------------------------------------------------------------------------------------------------------
 section .bss                                        ; Start of .bss section
 
@@ -23,7 +24,7 @@ filename resb filename_buffer_size                  ; The filename of the brainf
 
 frainbuck_input_buffer_size equ 1024                ; The size of the brainfuck input buffer
 frainbuck_input resb frainbuck_input_buffer_size    ; The brainfuck input buffer
-frainbuck_input_pointer resq 1                      ; The pointer to the current character in the brainfuck input buffer
+frainbuck_input_character_address resq 1            ; The offset to the current character in the brainfuck input buffer
 
 tape_size equ 30000                                 ; The size of the brainfuck language tape
 tape_offset resq 1                                  ; The current cell offset of the tape in the brainfuck language 
@@ -46,8 +47,8 @@ global _start                                       ; Make _start label availabl
 ; @brief Entry point
 ; ----------------------------------------------------------------------------------------------------------------------
 _start:
-    mov ecx, [rsp]
-    cmp ecx, 3                                      ; Check if the number of arguments is 2
+    mov ecx, [rsp]                                  ; Store the number of arguments in ECX
+    cmp ecx, 3                                      ; Check if the number of arguments is 3 (path, filename, input)
     jne exit_failure                                ; If not, exit the interpreter
 
     inc rsi                                         ; Skip the first argument (path of the executable)
@@ -63,7 +64,7 @@ _start:
     call string_copy                                ; Copy the brainfuck input into the frainbuck input buffer
 
     mov r11, frainbuck_input                        ; Store the brainfuck input address in R11 register
-    mov [frainbuck_input_pointer], r11              ; Store the address of the first character in the input pointer
+    mov [frainbuck_input_character_address], r11               ; Store the address of the first character in the inputoffset
    
     mov rdi, filename                               ; Store the filename in RDI register
     call open_file                                  ; Open the brainfuck code file
@@ -76,8 +77,8 @@ _start:
 
     call close_file                                 ; Close the brainfuck code file
 
-    mov rsi, new_line                               ; Store the new line character in the RSI register
-    call print_character                            ; Print the new line character
+    mov rsi, new_line                               ; Store the new line character address in the RSI register
+    call print_character                            ; Print the new line character to avoid a trailing "%" in the output
 
     call exit_success                               ; Exit the interpreter
 
@@ -94,25 +95,25 @@ frainbuck_parse_source_code_loop:
     jle exit_failure                                ; If so, exit the interpreter
 
     cmp byte [r8], 0                                ; Check if the current character is EOF
-    jle frainbuck_parse_source_code_end             ; If so, exit the interpreter
+    jle frainbuck_parse_source_code_end             ; If so, stop parsing and gracefully exit
 
     cmp byte [r8], '+'                              ; Check if the current character is '+'
-    je frainbuck_increment_cell_value               ; If so, increment the value stored in the currently selected cell
+    je frainbuck_increment_cell_value               ; If so, increment the value stored in the current cell
 
     cmp byte [r8], '-'                              ; Check if the current character is '-'
-    je frainbuck_decrement_cell_value               ; If so, decrement the value stored in the currently selected cell
+    je frainbuck_decrement_cell_value               ; If so, decrement the value stored in the current cell
 
     cmp byte [r8], '>'                              ; Check if the current character is '>'
-    je frainbuck_increment_tape_pointer             ; If so, increment the tape pointer
+    je frainbuck_move_to_next_cell                  ; If so, move to the next cell to the right
 
     cmp byte [r8], '<'                              ; Check if the current character is '<'
-    je frainbuck_decrement_tape_pointer             ; If so, decrement the tape pointer
+    je frainbuck_move_to_previous_cell              ; If so, move to the previous cell to the left
 
     cmp byte [r8], '.'                              ; Check if the current character is '.'
-    je frainbuck_print_cell_value                   ; If so, print the value stored in the currently selected cell
+    je frainbuck_print_cell_value                   ; If so, print the value stored in the current cell
 
     cmp byte [r8], ','                              ; Check if the current character is ','
-    je frainbuck_read_input_in_cell                 ; If so, read the value from stdin and store it in the current cell
+    je frainbuck_read_input_in_cell                 ; If so, store an input character in the current cell
 
     cmp byte [r8], '['                              ; Check if the current character is '['
     je frainbuck_jump_forward                       ; If so, conditionally jump to the matching ']' character
@@ -121,104 +122,107 @@ frainbuck_parse_source_code_loop:
     je frainbuck_jump_backward                      ; If so, conditionally jump to the matching '[' character
 
 frainbuck_parse_source_code_continue:
-    inc r8                                          ; Increment the memory address
-    dec r9                                          ; Decrement the size
-    jmp frainbuck_parse_source_code_loop            ; Jump to the source code parsing loop
+    inc r8                                          ; Get the next character from the source code
+    dec r9                                          ; Decrement the source code character iterator
+    jmp frainbuck_parse_source_code_loop            ; Continue parsing the remaining characters
 
 frainbuck_parse_source_code_end:
     ret                                             ; Return
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Increment the value in the cell where the tape pointer is pointing to
+; @brief Increment the value in the current cell
 ; @modifies R10 register
 ; ----------------------------------------------------------------------------------------------------------------------
 frainbuck_increment_cell_value:
-    mov r10, [tape_offset]                          ; Store the value of the tape pointer
-    add r10, tape                                   ; Add the tape address to the tape pointer value
+    mov r10, [tape_offset]                          ; Store the value of the tape offset
+    add r10, tape                                   ; Add the tape address to the tape offset value
     inc byte [r10]                                  ; Increment the value in the current cell
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Decrement the value in the cell where the tape pointer is pointing to
+; @brief Decrement the value in the current cell
 ; @modifies R10 register
 ; ----------------------------------------------------------------------------------------------------------------------
 frainbuck_decrement_cell_value:
-    mov r10, [tape_offset]                          ; Store the value of the tape pointer
-    add r10, tape                                   ; Add the tape address to the tape pointer value
+    mov r10, [tape_offset]                          ; Store the value of the tape offset 
+    add r10, tape                                   ; Add the tape address to the tape offset value
     dec byte [r10]                                  ; Decrement the value in the current cell
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Increment the brainfuck tape pointer
+; @brief Move the tape head to the next right cell
 ; @modifies none
 ; ----------------------------------------------------------------------------------------------------------------------
-frainbuck_increment_tape_pointer:
-    inc qword [tape_offset]                         ; Increment the tape pointer
-    cmp qword [tape_offset], tape_size              ; Check if the tape pointer is equal to the tape size
-    jge frainbuck_increment_tape_pointer_wrap       ; If so, wrap around
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+frainbuck_move_to_next_cell:
+    inc qword [tape_offset]                         ; Increment the tape offset 
+    cmp qword [tape_offset], tape_size              ; Check if the tape offset is equal to the tape size
+    jge frainbuck_increment_tape_offset_wrap        ; If so, wrap around
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
-frainbuck_increment_tape_pointer_wrap:
+frainbuck_increment_tape_offset_wrap:
     mov qword [tape_offset], 0                      ; Wrap around
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Decrement the brainfuck tape pointer
+; @brief Move the tape head to the previous left cell
 ; @modifies none
 ; ----------------------------------------------------------------------------------------------------------------------
-frainbuck_decrement_tape_pointer:
-    dec qword [tape_offset]                         ; Decrement the tape pointer
-    cmp qword [tape_offset], 0                      ; Check if the tape pointer is 0
-    jl frainbuck_decrement_tape_pointer_wrap       ; If so, wrap around
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+frainbuck_move_to_previous_cell:
+    dec qword [tape_offset]                         ; Decrement the tape offset 
+    cmp qword [tape_offset], 0                      ; Check if the tape offset is less than 0
+    jl frainbuck_decrement_tape_offset_wrap         ; If so, wrap around
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
-frainbuck_decrement_tape_pointer_wrap:
+frainbuck_decrement_tape_offset_wrap:
     mov qword [tape_offset], tape_size              ; Wrap around
-    dec qword [tape_offset]                         ; Decrement the tape pointer because we start at index 0
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    dec qword [tape_offset]                         ; Decrement the tape offset because we start at index 0
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Print the value in the cell where the tape pointer is pointing to
+; @brief Print the value in the current cell
 ; @modifies RAX, RSI, RDI, RDX registers
 ; ----------------------------------------------------------------------------------------------------------------------
 frainbuck_print_cell_value:
-    mov rsi, [tape_offset]                          ; Store the value of the tape pointer
-    add rsi, tape                                   ; Add the tape address to the tape pointer value
+    mov rsi, [tape_offset]                          ; Store the value of the tape offset 
+    add rsi, tape                                   ; Add the tape address to the tape offset value
     mov rax, 1                                      ; Syscall write (1)
     mov rdi, 1                                      ; STDOUT File descriptor
-    mov rdx, 1                                      ; Memory size
+    mov rdx, 1                                      ; Memory size (1 byte)
     syscall                                         ; Syscall
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; @brief Read one character from stdin and store it in the current cell
+; @modifies R10, R11, RAX registers
 ; ----------------------------------------------------------------------------------------------------------------------
 frainbuck_read_input_in_cell:
-    mov r10, [tape_offset]                          ; Store the value of the tape pointer
-    add r10, tape                                   ; Add the tape address to the tape pointer value
-    mov r11, [frainbuck_input_pointer]              ; Store the value of the input pointer which is a character address
+    mov r11, [frainbuck_input_character_address]    ; Store the value of the input offset which is a character address
+    cmp byte [r11], 0                               ; Check if the input offset is 0
+    je exit_failure                                 ; If so, exit the interpreter
     mov rax, [r11]                                  ; Read the character from the address in R11
+    mov r10, [tape_offset]                          ; Store the value of the tape offset 
+    add r10, tape                                   ; Add the tape address to the tape offset value
     mov [r10], rax                                  ; Store the character in the current cell
-    inc qword [frainbuck_input_pointer]             ; Increment the brainfuck input pointer
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    inc qword [frainbuck_input_character_address]   ; Go to the next input character address
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Jump to the matching ']' character
+; @brief Conditionally jump to the matching ']' character
 ; @modifies R10 and possibly the R8 register
 ; ----------------------------------------------------------------------------------------------------------------------
 frainbuck_jump_forward:
-    mov r10, [tape_offset]                          ; Store the value of the tape pointer
-    add r10, tape                                   ; Add the tape address to the tape pointer value
+    mov r10, [tape_offset]                          ; Store the value of the tape offset 
+    add r10, tape                                   ; Add the tape address to the tape offset value
     cmp byte [r10], 0                               ; Check if the value in the current cell is 0
-    jne frainbuck_parse_source_code_continue        ; If not, continue parsing the next characters
+    jne frainbuck_parse_source_code_continue        ; If not, continue parsing the remaining characters
 
 frainbuck_jump_forward_loop:
     inc r8                                          ; Go to the next character from the brainfuck source code
     dec r9                                          ; Decrement the source code iterator
     cmp byte [r8], ']'                              ; Check if the current character is ']'
-    je frainbuck_jump_forward_unnest                ; If so, 
+    je frainbuck_jump_forward_unnest                ; If so, decrement the bracket counter or conditionally end
     cmp byte [r8], '['                              ; Check if the current character is '['
-    je frainbuck_jump_forward_nest                  ; If so, 
+    je frainbuck_jump_forward_nest                  ; If so, increment the bracket counter
     jmp frainbuck_jump_forward_loop                 ; Continue looping
 
 frainbuck_jump_forward_nest:
@@ -227,28 +231,28 @@ frainbuck_jump_forward_nest:
 
 frainbuck_jump_forward_unnest:
     cmp dword [bracket_counter], 0                  ; Check if the bracket counter is 0
-    je frainbuck_parse_source_code_continue         ; Jump to the source code parsing loop
+    je frainbuck_parse_source_code_continue         ; Continue parsing the remaining characters
     dec dword [bracket_counter]                     ; Decrement the bracket counter
     jmp frainbuck_jump_forward_loop                 ; Continue looping
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Jump to the matching '[' character
+; @brief Conditionally jump to the matching '[' character
 ; @modifies R10 and possibly the R8 register
 ; ----------------------------------------------------------------------------------------------------------------------
 frainbuck_jump_backward:
-    mov r10, [tape_offset]                          ; Store the value of the tape pointer
-    add r10, tape                                   ; Add the tape address to the tape pointer value
+    mov r10, [tape_offset]                          ; Store the value of the tape offset 
+    add r10, tape                                   ; Add the tape address to the tape offset value
     cmp byte [r10], 0                               ; Check if the value in the current cell is 0
-    je frainbuck_parse_source_code_continue         ; If so, continue parsing the next characters
+    je frainbuck_parse_source_code_continue         ; If so, continue parsing the remaining characters
 
 frainbuck_jump_backward_loop:
     dec r8                                          ; Go to the previous character from the brainfuck source code
     inc r9                                          ; Increment the source code iterator
     cmp byte [r8], '['                              ; Check if the current character is '['
-    je frainbuck_jump_backward_unnest               ; If so, 
+    je frainbuck_jump_backward_unnest               ; If so, increment the bracket counter or conditionally end
     cmp byte [r8], ']'                              ; Check if the current character is ']'
-    je frainbuck_jump_backward_nest                 ; If so,
-    jmp frainbuck_jump_backward_loop                ; Jump to the source code parsing loop
+    je frainbuck_jump_backward_nest                 ; If so, decrement the bracket counter
+    jmp frainbuck_jump_backward_loop                ; Continue looping
 
 frainbuck_jump_backward_nest:
     inc dword [bracket_counter]                     ; Increment the bracket counter
@@ -256,14 +260,14 @@ frainbuck_jump_backward_nest:
 
 frainbuck_jump_backward_unnest:
     cmp dword [bracket_counter], 0                  ; Check if the bracket counter is 0
-    je frainbuck_jump_backward_end                  ; Jump to the source code parsing loop
+    je frainbuck_jump_backward_end                  ; If so, go back 1 character and continue parsing the remaining characters
     dec dword [bracket_counter]                     ; Decrement the bracket counter
     jmp frainbuck_jump_backward_loop                ; Continue looping
 
 frainbuck_jump_backward_end:
     dec r8                                          ; Go to the previous character from the brainfuck source code
     inc r9                                          ; Increment the source code iterator
-    jmp frainbuck_parse_source_code_continue        ; Jump to the source code parsing loop
+    jmp frainbuck_parse_source_code_continue        ; Continue parsing the remaining characters
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; @brief Copy a string from one address to another
@@ -277,9 +281,9 @@ string_copy:
 
 string_copy_loop:
     cmp rcx, rdx                                    ; Compare the number of read characters to the destination buffer size
-    je string_copy_done                             ; If so, exit the function
+    je string_copy_done                             ; If so, return from the function
     cmp byte [r10], 0                               ; Check if the string is empty
-    je string_copy_done                             ; If so, exit the function
+    je string_copy_done                             ; If so, return from the function
     mov rax, [r10]                                  ; Store the current character in RAX
     mov [r11], rax                                  ; Store the current character in the destination address
     inc rcx                                         ; Increment the number of read characters
@@ -294,7 +298,7 @@ string_copy_done:
 ; @brief Open a file with a given filename
 ; @param filename The name of the file to open stored in the RDI register
 ; @note Assumes that the filename is already stored in the RDI register
-; @modifies RAX, RDI, RSI, RDX registers
+; @modifies RAX, RSI, RDX registers
 ; ----------------------------------------------------------------------------------------------------------------------
 open_file:
     mov rax, 2                                      ; Syscall open (2)
@@ -349,7 +353,7 @@ print_character:
 ; ----------------------------------------------------------------------------------------------------------------------
 exit_success:
     mov rax, 60                                     ; Syscall exit (60)
-    mov rdi, 0                                      ; Exit code
+    mov rdi, 0                                      ; Exit code success
     syscall                                         ; Syscall
 
 ; ----------------------------------------------------------------------------------------------------------------------
@@ -358,5 +362,5 @@ exit_success:
 ; ----------------------------------------------------------------------------------------------------------------------
 exit_failure:
     mov rax, 60                                     ; Syscall exit (60)
-    mov rdi, 2                                      ; Exit code
+    mov rdi, 2                                      ; Exit code failure
     syscall                                         ; Syscall
