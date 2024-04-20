@@ -2,32 +2,63 @@
 ; Copyright (c) 2024, Kostoski Stefan (MIT License).
 ; https://github.com/kostoskistefan/frainbuck
 
-; TODO: Make the second argument optional
-; TODO: Add error messages
+; ----------------------------------------------------------------------------------------------------------------------
+; Data Section
+; ----------------------------------------------------------------------------------------------------------------------
+section .data                                       ; Start of .data section
+
+filename_buffer_size equ 256                        ; The size of the filename buffer
+stdin_buffer_size equ 256                           ; The size of the brainfuck stdin input buffer
+tape_size equ 30000                                 ; The size of the brainfuck language tape
+text_buffer_size equ 10000                          ; The size of the input brainfuck code text buffer
+
+message_stdin_input db "frainbuck::input> ", 0
+message_stdin_input_length equ $ - message_stdin_input
+
+error_argument_count db "frainbuck::error: invalid number of arguments", 10, 0
+error_argument_count_length equ $ - error_argument_count
+
+error_text_buffer_full db "frainbuck::error: source code buffer is full", 10, 0
+error_text_buffer_full_length equ $ - error_text_buffer_full
+
+error_unmatched_brackets db "frainbuck::error: source code contains unmatched brackets", 10, 0
+error_unmatched_brackets_length equ $ - error_unmatched_brackets
+
+error_stdin_invalid db "frainbuck::error: stdin input is not valid", 10, 0
+error_stdin_invalid_length equ $ - error_stdin_invalid
+
+error_stdin_buffer_full db "frainbuck::error: stdin input buffer is full", 10, 0
+error_stdin_buffer_full_length equ $ - error_stdin_buffer_full
+
+error_stdin_null_reached db "frainbuck::error: reached null terminator in stdin input buffer", 10, 0
+error_stdin_null_reached_length equ $ - error_stdin_null_reached
+
+error_file_open_failed db "frainbuck::error: failed to open file", 10, 0
+error_file_open_failed_length equ $ - error_file_open_failed
+
+error_file_read_failed db "frainbuck::error: failed to read file", 10, 0
+error_file_read_failed_length equ $ - error_file_read_failed
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; Block Starting Symbol (BSS) Section
 ; ----------------------------------------------------------------------------------------------------------------------
 section .bss                                        ; Start of .bss section
 
-filename_buffer_size equ 256                        ; The size of the filename buffer
 filename resb filename_buffer_size                  ; The filename of the brainfuck code
 
-stdin_buffer_size equ 256                           ; The size of the brainfuck stdin input buffer
 stdin_buffer resb stdin_buffer_size                 ; The brainfuck stdin input buffer
 stdin_pointer resq 1                                ; The pointer to the current character in the stdin input buffer
 stdin_iterator resq 1                               ; The iterator to the current character in the stdin input buffer
 
-tape_size equ 30000                                 ; The size of the brainfuck language tape
 tape_offset resq 1                                  ; The current cell offset of the tape in the brainfuck language 
 tape resb tape_size                                 ; The brainfuck language tape
 
-text_buffer_size equ 10000                          ; The size of the input brainfuck code text buffer
 text_buffer resb text_buffer_size                   ; The input brainfuck code text buffer
 
 file_descriptor resd 1                              ; The file descriptor of the brainfuck code file
 
-bracket_counter resd 1                              ; The current nesting level of the '[' character
+bracket_counter resd 1                              ; The counter for keeping track of opening and closing brackets
+requires_stdin  resd 1                              ; A flag to indicate if stdin input is required
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; Text Section
@@ -39,23 +70,17 @@ global _start                                       ; Make _start label availabl
 ; @brief Entry point
 ; ----------------------------------------------------------------------------------------------------------------------
 _start:
+    mov rsi, error_argument_count                   ; Store the error message in the RSI register
+    mov rdx, error_argument_count_length            ; Store the length of the error message in the RDX register
+
     mov ecx, [rsp]                                  ; Store the number of arguments in ECX
-    cmp ecx, 3                                      ; Check if the number of arguments is 3 (path, filename, input)
-    jne exit_failure                                ; If not, exit the interpreter
+    cmp ecx, 2                                      ; Check if the number of arguments is 2 (path, filename)
+    jne exit_failure_with_message                   ; If not, exit the interpreter
 
-    inc rsi                                         ; Skip the first argument (path of the executable)
     mov rdx, filename_buffer_size                   ; Store the size of the filename buffer in RDX register
-    mov r10, [rsp + rsi * 8 + 8]                    ; Store the second argument in RDI register
-    mov r11, filename                               ; Store the filename address in RSI register
+    mov r10, [rsp + 16]                             ; Store the second argument in R10 register
+    mov r11, filename                               ; Store the filename address in R11 register
     call string_copy                                ; Copy the filename into the filename buffer
-
-    inc rsi                                         ; Move to the next argument
-    mov rdx, stdin_buffer_size                      ; Store the size of the brainfuck input buffer in RDX register
-    mov r10, [rsp + rsi * 8 + 8]                    ; Store the second argument in RDI register
-    mov r11, stdin_buffer                           ; Store the brainfuck input address in RSI register
-    call string_copy                                ; Copy the brainfuck input into the frainbuck input buffer
-
-    mov qword [stdin_pointer], stdin_buffer         ; Store the address of the first stdin character
    
     mov rdi, filename                               ; Store the filename in RDI register
     call open_file                                  ; Open the brainfuck code file
@@ -66,6 +91,12 @@ _start:
 
     call analyze_source_code                        ; Analyze the source code
 
+    cmp dword [requires_stdin], 1                   ; Check if stdin input is required
+    jne _start_continue                             ; If not, continue with code parsing
+
+    call stdin_read                                 ; Read the stdin input
+
+_start_continue:
     call parse_source_code                          ; Parse the source code 
 
     call close_file                                 ; Close the brainfuck code file
@@ -73,16 +104,39 @@ _start:
     call exit_success                               ; Exit the interpreter
 
 ; ----------------------------------------------------------------------------------------------------------------------
+; @brief Read stdin input
+; @modifies RAX, RDI, RDX, RSI registers
+; ----------------------------------------------------------------------------------------------------------------------
+stdin_read:
+    mov rsi, message_stdin_input                    ; Store the stdin input message address in RSI
+    mov rdx, message_stdin_input_length             ; Store the length of the stdin input message in RDX
+    call print_string
+    mov rax, 0                                      ; Syscall read (0)
+    mov rdi, 0                                      ; Standard input
+    mov rdx, stdin_buffer_size                      ; Store the size of the stdin buffer in the RDX register
+    mov rsi, stdin_buffer                           ; Store the address of the stdin buffer in the RSI register
+    syscall                                         ; Syscall
+    mov rsi, error_stdin_invalid                    ; Store the error message in the RSI register
+    mov rdx, error_stdin_invalid_length             ; Store the length of the error message in the RDX register
+    cmp rax, 0                                      ; Check if the stdin input was read successfully
+    jle exit_failure_with_message                   ; If not, exit the interpreter
+    mov qword [stdin_pointer], stdin_buffer         ; Store the address of the first stdin character
+    ret                                             ; Return
+
+; ----------------------------------------------------------------------------------------------------------------------
 ; @brief Analyze the source code to determine if each opening bracket has a matching closing bracket
-; @modifies R8 and R9 registers
+; @modifies R8, R9, RSI, RDX registers
 ; ----------------------------------------------------------------------------------------------------------------------
 analyze_source_code:
     mov r8, text_buffer                             ; Store the memory address of the source code in the R8 register
     mov r9, text_buffer_size                        ; Store the size of the text buffer in the R9 register
 
+    mov rsi, error_text_buffer_full                 ; Store the error message in the RSI register
+    mov rdx, error_text_buffer_full_length          ; Store the length of the error message in the RDX register
+
 analyze_source_code_loop:
     cmp r9, 0                                       ; Check if we've reached the end of the text buffer memory
-    jle exit_failure                                ; If so, exit the interpreter
+    jle exit_failure_with_message                   ; If so, exit the interpreter
 
     cmp byte [r8], 0                                ; Check if the current character is EOF
     jle analyze_source_code_end                     ; If so, stop parsing and gracefully exit
@@ -92,6 +146,9 @@ analyze_source_code_loop:
 
     cmp byte [r8], ']'                              ; Check if the current character is ']'
     je analyze_source_code_unnest                   ; If so, decrement the bracket counter
+
+    cmp byte [r8], ','                              ; Check if the current character is ','
+    je analyze_source_code_request_stdin            ; If so, indicate that stdin input is required
 
 analyze_source_code_continue:
     inc r8                                          ; Get the next character from the source code
@@ -106,9 +163,15 @@ analyze_source_code_unnest:
     dec dword [bracket_counter]                     ; Decrement the bracket counter
     jmp analyze_source_code_continue                ; Continue looping
 
+analyze_source_code_request_stdin:
+    mov qword [requires_stdin], 1                   ; Indicate that stdin input is required
+    jmp analyze_source_code_continue                ; Continue looping
+
 analyze_source_code_end:
+    mov rsi, error_unmatched_brackets               ; Store the error message in the RSI register
+    mov rdx, error_unmatched_brackets_length        ; Store the length of the error message in the RDX register
     cmp dword [bracket_counter], 0                  ; Check if the bracket counter is 0
-    jne exit_failure                                ; If not, exit the interpreter, there is an unmatched bracket
+    jne exit_failure_with_message                   ; If not, exit the interpreter, there is an unmatched bracket
     ret
 
 ; ----------------------------------------------------------------------------------------------------------------------
@@ -119,9 +182,12 @@ parse_source_code:
     mov r8, text_buffer                             ; Store the memory address of the source code in the R8 register
     mov r9, text_buffer_size                        ; Store the size of the text buffer in the R9 register
 
+    mov rsi, error_text_buffer_full                 ; Store the error message in the RSI register
+    mov rdx, error_text_buffer_full_length          ; Store the length of the error message in the RDX register
+
 parse_source_code_loop:
     cmp r9, 0                                       ; Check if we've reached the end of the text buffer memory
-    jle exit_failure                                ; If so, exit the interpreter
+    jle exit_failure_with_message                   ; If so, exit the interpreter
 
     cmp byte [r8], 0                                ; Check if the current character is EOF
     jle parse_source_code_end                       ; If so, stop parsing and gracefully exit
@@ -214,10 +280,8 @@ decrement_tape_offset_wrap:
 print_cell_value:
     mov rsi, [tape_offset]                          ; Store the value of the tape offset 
     add rsi, tape                                   ; Add the tape address to the tape offset value
-    mov rax, 1                                      ; Syscall write (1)
-    mov rdi, 1                                      ; STDOUT File descriptor
     mov rdx, 1                                      ; Memory size (1 byte)
-    syscall                                         ; Syscall
+    call print_string                               ; Print the value
     jmp parse_source_code_continue                  ; Continue parsing the remaining characters
     
 ; ----------------------------------------------------------------------------------------------------------------------
@@ -225,11 +289,15 @@ print_cell_value:
 ; @modifies R10, R11, RAX registers
 ; ----------------------------------------------------------------------------------------------------------------------
 read_input_in_cell:
+    mov rsi, error_stdin_buffer_full                ; Store the error message in the RSI register
+    mov rdx, error_stdin_buffer_full_length         ; Store the length of the error message in the RDX register
     cmp qword [stdin_iterator], stdin_buffer_size   ; Check if the stdin iterator is equal to the stdin buffer size
-    je exit_failure                                 ; If so, exit the interpreter to avoid a buffer overflow
+    je exit_failure_with_message                    ; If so, exit the interpreter to avoid a buffer overflow
     mov r11, [stdin_pointer]                        ; Store the value of the stdin pointer which is a character address
+    mov rsi, error_stdin_null_reached               ; Store the error message in the RSI register
+    mov rdx, error_stdin_null_reached_length        ; Store the length of the error message in the RDX register
     cmp byte [r11], 0                               ; Check if the stdin pointer is a null terminator
-    je exit_failure                                 ; If so, exit the interpreter
+    je exit_failure_with_message                    ; If so, exit the interpreter
     mov rax, [r11]                                  ; Read the character from the address in R11
     mov r10, [tape_offset]                          ; Store the value of the tape offset 
     add r10, tape                                   ; Add the tape address to the tape offset value
@@ -337,8 +405,10 @@ open_file:
     mov rsi, 0                                      ; Read only
     mov rdx, 0                                      ; No permissions - Doesn't matter for reading
     syscall                                         ; Syscall
+    mov rsi, error_file_open_failed                 ; Store the error message in the RSI register
+    mov rdx, error_file_open_failed_length          ; Store the length of the error message in the RDX register
     cmp rax, 0                                      ; Check if the file was opened successfully
-    jle exit_failure                                ; If not, exit the interpreter
+    jle exit_failure_with_message                   ; If not, exit the interpreter
     mov [file_descriptor], rax                      ; Save the file descriptor
     ret                                             ; Return
 
@@ -363,21 +433,30 @@ read_file:
     mov rax, 0                                      ; Syscall read (0)
     mov rdi, [file_descriptor]                      ; File descriptor
     syscall                                         ; Syscall
+    mov rsi, error_file_read_failed                 ; Store the error message in the RSI register
+    mov rdx, error_file_read_failed_length          ; Store the length of the error message in the RDX register
     cmp rax, 0                                      ; Check if the file was read successfully
-    jle exit_failure                                ; If not, exit the interpreter
+    jle exit_failure_with_message                   ; If not, exit the interpreter
     ret                                             ; Return
 
 ; ----------------------------------------------------------------------------------------------------------------------
-; @brief Print a character to the console
-; @param character The character to print stored in the RSI register
+; @brief Print a string to the console
+; @param string The string to print stored in the RSI register
+; @param string_size The size of the string to print stored in the RDX register
 ; @modifies RAX, RDI, RDX registers
 ; ----------------------------------------------------------------------------------------------------------------------
-print_character:
+print_string:
     mov rax, 1                                      ; Syscall write (1)
     mov rdi, 1                                      ; STDOUT File descriptor
-    mov rdx, 1                                      ; Memory size
     syscall                                         ; Syscall
     ret                                             ; Return
+
+; ----------------------------------------------------------------------------------------------------------------------
+; @brief Exit with a failure exit code and print an error message
+; ----------------------------------------------------------------------------------------------------------------------
+exit_failure_with_message:
+    call print_string
+    jmp exit_failure
 
 ; ----------------------------------------------------------------------------------------------------------------------
 ; @brief Exit with a success exit code
