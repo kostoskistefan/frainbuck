@@ -2,8 +2,6 @@
 ; Copyright (c) 2024, Kostoski Stefan (MIT License).
 ; https://github.com/kostoskistefan/frainbuck
 
-; TODO: Allow multiple inputs
-
 ; ----------------------------------------------------------------------------------------------------------------------
 ; Data Section
 ; ----------------------------------------------------------------------------------------------------------------------
@@ -31,9 +29,6 @@ error_stdin_invalid_length equ $ - error_stdin_invalid
 
 error_stdin_buffer_full db "frainbuck::error: stdin input buffer is full", 10, 0
 error_stdin_buffer_full_length equ $ - error_stdin_buffer_full
-
-error_stdin_null_reached db "frainbuck::error: reached null terminator in stdin input buffer", 10, 0
-error_stdin_null_reached_length equ $ - error_stdin_null_reached
 
 error_file_open_failed db "frainbuck::error: failed to open file", 10, 0
 error_file_open_failed_length equ $ - error_file_open_failed
@@ -295,15 +290,16 @@ read_input_in_cell:
     mov rdx, error_stdin_buffer_full_length         ; Store the length of the error message in the RDX register
     cmp qword [stdin_iterator], stdin_buffer_size   ; Check if the stdin iterator is equal to the stdin buffer size
     je exit_failure_with_message                    ; If so, exit the interpreter to avoid a buffer overflow
-    mov r11, [stdin_pointer]                        ; Store the value of the stdin pointer which is a character address
-    mov rsi, error_stdin_null_reached               ; Store the error message in the RSI register
-    mov rdx, error_stdin_null_reached_length        ; Store the length of the error message in the RDX register
-    cmp byte [r11], 0                               ; Check if the stdin pointer is a null terminator
-    je exit_failure_with_message                    ; If so, exit the interpreter
-    mov rax, [r11]                                  ; Read the character from the address in R11
     mov r10, [tape_offset]                          ; Store the value of the tape offset 
     add r10, tape                                   ; Add the tape address to the tape offset value
+    mov r11, [stdin_pointer]                        ; Store the value of the stdin pointer which is a character address
+    movzx rax, byte [r11]                                  ; Read the character from the address in R11
     mov [r10], rax                                  ; Store the character in the current cell
+    cmp byte [r11], 0                               ; Check if the stdin pointer is a null terminator
+    jne read_input_in_cell_increment                ; If not, increment the stdin pointer
+    jmp parse_source_code_continue                  ; Continue parsing the remaining characters
+
+read_input_in_cell_increment:
     inc qword [stdin_pointer]                       ; Go to the next input character address
     inc qword [stdin_iterator]                      ; Increment the stdin iterator
     jmp parse_source_code_continue                  ; Continue parsing the remaining characters
