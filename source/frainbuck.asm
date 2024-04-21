@@ -2,6 +2,8 @@
 ; Copyright (c) 2024, Kostoski Stefan (MIT License).
 ; https://github.com/kostoskistefan/frainbuck
 
+; TODO: Allow multiple inputs
+
 ; ----------------------------------------------------------------------------------------------------------------------
 ; Data Section
 ; ----------------------------------------------------------------------------------------------------------------------
@@ -10,7 +12,7 @@ section .data                                       ; Start of .data section
 filename_buffer_size equ 256                        ; The size of the filename buffer
 stdin_buffer_size equ 256                           ; The size of the brainfuck stdin input buffer
 tape_size equ 30000                                 ; The size of the brainfuck language tape
-text_buffer_size equ 10000                          ; The size of the input brainfuck code text buffer
+text_buffer_size equ 65536                          ; The size of the input brainfuck code text buffer
 
 message_stdin_input db "frainbuck::input> ", 0
 message_stdin_input_length equ $ - message_stdin_input
